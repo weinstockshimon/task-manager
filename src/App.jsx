@@ -8,30 +8,26 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [masterCategories, setMasterCategories] = useState([])
   const [activeTab, setActiveTab] = useState('inbox')
-  const [showSheet, setShowSheet] = useState(false)
-  const [sheetMode, setSheetMode] = useState('task')
-  const [selectedMaster, setSelectedMaster] = useState(null)
-  const [selectedFolder, setSelectedFolder] = useState(null)
-  const [selectedTask, setSelectedTask] = useState(null)
-  const [selectedMasterId, setSelectedMasterId] = useState(null)
-  const [taskTitle, setTaskTitle] = useState('')
-  const [folderInput, setFolderInput] = useState('')
-  const [masterNameInput, setMasterNameInput] = useState('')
-  const [folderNameInput, setFolderNameInput] = useState('')
-  const [dueDate, setDueDate] = useState('')
-  const [subtaskTitle, setSubtaskTitle] = useState('')
-  const [calendarDate, setCalendarDate] = useState(new Date())
-  const [notice, setNotice] = useState('')
-  const [undoAction, setUndoAction] = useState(null)
+  const [sheet, setSheet] = useState(null)
   const [searchText, setSearchText] = useState('')
-  const [showTaskMenu, setShowTaskMenu] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newTask, setNewTask] = useState('')
+  const [newDueDate, setNewDueDate] = useState('')
+  const [subtaskText, setSubtaskText] = useState('')
+  const [notice, setNotice] = useState('')
+  const [undo, setUndo] = useState(null)
+  const [calendarDate, setCalendarDate] = useState(new Date())
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
       setLoading(false)
     })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => setSession(newSession))
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession)
+    })
+
     return () => listener.subscription.unsubscribe()
   }, [])
 
@@ -39,26 +35,59 @@ export default function App() {
     if (session) loadData()
   }, [session])
 
-  const allFolders = useMemo(() => masterCategories.flatMap((m) => m.folders.map((f) => f.name)), [masterCategories])
-  const allTasks = useMemo(() => masterCategories.flatMap((m) => m.folders.flatMap((f) => f.tasks.map((t) => ({ ...t, masterName: m.name, folderName: f.name, folderId: f.id })))), [masterCategories])
+  const allTasks = useMemo(() => {
+    return masterCategories.flatMap((master) =>
+      master.categories.flatMap((category) =>
+        category.tasks.map((task) => ({
+          ...task,
+          masterId: master.id,
+          masterName: master.name,
+          categoryId: category.id,
+          categoryName: category.name,
+        }))
+      )
+    )
+  }, [masterCategories])
+
   const todayIso = new Date().toISOString().slice(0, 10)
   const search = searchText.trim().toLowerCase()
 
   const visibleTasks = allTasks.filter((task) => {
-    const match = !search || task.title.toLowerCase().includes(search) || task.folderName.toLowerCase().includes(search) || task.masterName.toLowerCase().includes(search) || task.subtasks.some((s) => s.title.toLowerCase().includes(search))
-    if (!match) return false
+    const matchesSearch =
+      !search ||
+      task.title.toLowerCase().includes(search) ||
+      task.categoryName.toLowerCase().includes(search) ||
+      task.masterName.toLowerCase().includes(search) ||
+      task.subtasks.some((subtask) => subtask.title.toLowerCase().includes(search))
+
+    if (!matchesSearch) return false
     if (activeTab === 'archive') return task.completed
     if (activeTab === 'today') return !task.completed && task.due === todayIso
     if (activeTab === 'calendar') return !task.completed && task.due
     return !task.completed
   })
 
-  const currentSelectedTask = selectedTask ? allTasks.find((t) => t.id === selectedTask.id) || selectedTask : null
-  const currentSelectedMaster = selectedMaster ? masterCategories.find((m) => m.id === selectedMaster.id) || selectedMaster : null
-  const currentSelectedFolder = selectedFolder ? masterCategories.flatMap((m) => m.folders.map((f) => ({ ...f, masterName: m.name }))).find((f) => f.id === selectedFolder.id) || selectedFolder : null
+  const selectedMaster = sheet?.masterId
+    ? masterCategories.find((master) => master.id === sheet.masterId)
+    : null
+
+  const selectedCategory = sheet?.categoryId
+    ? masterCategories
+        .flatMap((master) =>
+          master.categories.map((category) => ({
+            ...category,
+            masterId: master.id,
+            masterName: master.name,
+          }))
+        )
+        .find((category) => category.id === sheet.categoryId)
+    : null
+
+  const selectedTask = sheet?.taskId ? allTasks.find((task) => task.id === sheet.taskId) : null
 
   async function loadData() {
     setLoading(true)
+
     const [{ data: masters }, { data: folders }, { data: tasks }, { data: subtasks }] = await Promise.all([
       supabase.from('master_categories').select('*').order('id'),
       supabase.from('folders').select('*').order('id'),
@@ -66,52 +95,62 @@ export default function App() {
       supabase.from('subtasks').select('*').order('id'),
     ])
 
-    const built = (masters || []).map((m) => ({
-      id: m.id,
-      name: m.name,
-      folders: (folders || []).filter((f) => f.master_category_id === m.id).map((f) => ({
-        id: f.id,
-        name: f.name,
-        tasks: (tasks || []).filter((t) => t.folder_id === f.id).map((t) => ({
-          id: t.id,
-          title: t.title,
-          due: t.due_date || '',
-          completed: Boolean(t.completed),
-          subtasks: (subtasks || []).filter((s) => s.task_id === t.id).map((s) => ({ id: s.id, title: s.title, completed: Boolean(s.completed) })),
+    const built = (masters || []).map((master) => ({
+      id: master.id,
+      name: master.name,
+      categories: (folders || [])
+        .filter((folder) => folder.master_category_id === master.id)
+        .map((folder) => ({
+          id: folder.id,
+          name: folder.name,
+          tasks: (tasks || [])
+            .filter((task) => task.folder_id === folder.id)
+            .map((task) => ({
+              id: task.id,
+              title: task.title,
+              due: task.due_date || '',
+              completed: Boolean(task.completed),
+              subtasks: (subtasks || [])
+                .filter((subtask) => subtask.task_id === task.id)
+                .map((subtask) => ({
+                  id: subtask.id,
+                  title: subtask.title,
+                  completed: Boolean(subtask.completed),
+                })),
+            })),
         })),
-      })),
     }))
 
     setMasterCategories(built)
     setLoading(false)
   }
 
-  function showNoticeMessage(message) {
+  function showNotice(message) {
     setNotice(message)
     window.setTimeout(() => setNotice(''), 2500)
   }
 
   function saveUndo(message, action) {
-    setUndoAction({ message, action })
-    window.setTimeout(() => setUndoAction(null), 5000)
+    setUndo({ message, action })
+    window.setTimeout(() => setUndo(null), 5000)
   }
 
-  async function undoLastAction() {
-    if (!undoAction) return
-    await undoAction.action?.()
-    setUndoAction(null)
+  async function restoreUndo() {
+    if (!undo) return
+    await undo.action?.()
+    setUndo(null)
     await loadData()
   }
 
   async function signIn() {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) showNoticeMessage(error.message)
+    if (error) showNotice(error.message)
   }
 
   async function signUp() {
     const { error } = await supabase.auth.signUp({ email, password })
-    if (error) showNoticeMessage(error.message)
-    else showNoticeMessage('Account created. You can sign in now.')
+    if (error) showNotice(error.message)
+    else showNotice('Account created. You can sign in now.')
   }
 
   async function signOut() {
@@ -119,107 +158,116 @@ export default function App() {
     setSession(null)
   }
 
-  function openMasterSheet() {
-    setSheetMode('master')
-    setMasterNameInput('')
-    setShowSheet(true)
-  }
-
-  function openFolderSheet(masterId) {
-    setSheetMode('folder')
-    setSelectedMasterId(masterId)
-    setFolderNameInput('')
-    setShowSheet(true)
-  }
-
-  function openAddTask(folderName = '') {
-    setSheetMode('task')
-    setSelectedTask(null)
-    setTaskTitle('')
-    setFolderInput(folderName)
-    setDueDate('')
-    setShowSheet(true)
-  }
-
-  function openTask(task) {
-    setSheetMode('detail')
-    setSelectedTask(task)
-    setSubtaskTitle('')
-    setShowTaskMenu(false)
-    setShowSheet(true)
-  }
-
-  function openMasterDetail(master) {
-    setSheetMode('masterDetail')
-    setSelectedMaster(master)
-    setShowSheet(true)
-  }
-
-  function openFolderDetail(folder, masterName) {
-    setSheetMode('folderDetail')
-    setSelectedFolder({ ...folder, masterName })
-    setShowSheet(true)
-  }
-
   async function addMasterCategory() {
-    const name = masterNameInput.trim()
+    const name = newName.trim()
     if (!name) return
-    await supabase.from('master_categories').insert({ name })
-    setShowSheet(false)
+
+    const { data, error } = await supabase.from('master_categories').insert({ name }).select().single()
+    if (error) return showNotice(error.message)
+
+    saveUndo(`Added ${name}`, async () => supabase.from('master_categories').delete().eq('id', data.id))
+    setNewName('')
+    setSheet(null)
     await loadData()
   }
 
-  async function addFolder() {
-    const name = folderNameInput.trim()
-    if (!name || !selectedMasterId) return
-    await supabase.from('folders').insert({ name, master_category_id: selectedMasterId })
-    setShowSheet(false)
+  async function addCategory(masterId) {
+    const name = newName.trim()
+    if (!name) return
+
+    const { data, error } = await supabase
+      .from('folders')
+      .insert({ name, master_category_id: masterId })
+      .select()
+      .single()
+
+    if (error) return showNotice(error.message)
+
+    saveUndo(`Added ${name}`, async () => supabase.from('folders').delete().eq('id', data.id))
+    setNewName('')
+    setSheet({ type: 'master', masterId })
     await loadData()
   }
 
-  function getMasterForFolder(folderName) {
-    return folderName.toLowerCase().startsWith('tm-') ? 'Jobs' : 'General'
+  async function addTaskToCategory(categoryId) {
+    const title = newTask.trim()
+    if (!title) return
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .insert({ folder_id: categoryId, title, due_date: newDueDate || null, completed: false })
+      .select()
+      .single()
+
+    if (error) return showNotice(error.message)
+
+    saveUndo(`Added ${title}`, async () => supabase.from('tasks').delete().eq('id', data.id))
+    setNewTask('')
+    setNewDueDate('')
+    setSheet({ type: 'category', categoryId })
+    await loadData()
   }
 
-  async function getOrCreateFolder(folderName) {
-    const existing = masterCategories.flatMap((m) => m.folders).find((f) => f.name.toLowerCase() === folderName.toLowerCase())
-    if (existing) return existing.id
+  async function toggleTask(taskId) {
+    const task = allTasks.find((item) => item.id === taskId)
+    if (!task) return
 
-    let master = masterCategories.find((m) => m.name === getMasterForFolder(folderName)) || masterCategories[0]
-    if (!master) {
-      const { data } = await supabase.from('master_categories').insert({ name: 'General' }).select().single()
-      master = data
+    const hasOpenSubtasks = task.subtasks.some((subtask) => !subtask.completed)
+    if (!task.completed && hasOpenSubtasks) {
+      showNotice('Finish all subtasks before completing this task.')
+      return
     }
 
-    const { data: folder } = await supabase.from('folders').insert({ name: folderName, master_category_id: master.id }).select().single()
-    return folder.id
-  }
+    const { error } = await supabase.from('tasks').update({ completed: !task.completed }).eq('id', taskId)
+    if (error) return showNotice(error.message)
 
-  async function addTask() {
-    const cleanTitle = taskTitle.trim()
-    const cleanFolder = folderInput.trim()
-    if (!cleanTitle || !cleanFolder) return
-    const folderId = await getOrCreateFolder(cleanFolder)
-    await supabase.from('tasks').insert({ title: cleanTitle, folder_id: folderId, due_date: dueDate || null, completed: false })
-    setShowSheet(false)
+    saveUndo(task.completed ? `Reopened ${task.title}` : `Completed ${task.title}`, async () =>
+      supabase.from('tasks').update({ completed: task.completed }).eq('id', taskId)
+    )
     await loadData()
   }
 
-  async function updateMasterName(masterId, name) {
-    setMasterCategories((prev) => prev.map((m) => (m.id === masterId ? { ...m, name } : m)))
-    await supabase.from('master_categories').update({ name }).eq('id', masterId)
+  async function toggleSubtask(taskId, subtaskId) {
+    const task = allTasks.find((item) => item.id === taskId)
+    const subtask = task?.subtasks.find((item) => item.id === subtaskId)
+    if (!subtask) return
+
+    const { error } = await supabase.from('subtasks').update({ completed: !subtask.completed }).eq('id', subtaskId)
+    if (error) return showNotice(error.message)
+
+    saveUndo('Updated subtask', async () =>
+      supabase.from('subtasks').update({ completed: subtask.completed }).eq('id', subtaskId)
+    )
+    await loadData()
   }
 
-  async function updateFolderName(folderId, name) {
-    setMasterCategories((prev) => prev.map((m) => ({ ...m, folders: m.folders.map((f) => (f.id === folderId ? { ...f, name } : f)) })))
-    await supabase.from('folders').update({ name }).eq('id', folderId)
+  async function addSubtask() {
+    const title = subtaskText.trim()
+    if (!title || !selectedTask) return
+
+    const { data, error } = await supabase
+      .from('subtasks')
+      .insert({ task_id: selectedTask.id, title, completed: false })
+      .select()
+      .single()
+
+    if (error) return showNotice(error.message)
+
+    saveUndo(`Added ${title}`, async () => supabase.from('subtasks').delete().eq('id', data.id))
+    setSubtaskText('')
+    await loadData()
   }
 
-  function updateTaskTitleLocal(taskId, title) {
-    setMasterCategories((prev) => prev.map((m) => ({ ...m, folders: m.folders.map((f) => ({ ...f, tasks: f.tasks.map((t) => (t.id === taskId ? { ...t, title } : t)) })) })))
-  }
-
-  async function saveTaskTitle(taskId, title) {
+  async function updateTaskTitle(taskId, title) {
+    setMasterCategories((prev) =>
+      prev.map((master) => ({
+        ...master,
+        categories: master.categories.map((category) => ({
+          ...category,
+          tasks: category.tasks.map((task) => (task.id === taskId ? { ...task, title } : task)),
+        })),
+      }))
+    )
     await supabase.from('tasks').update({ title }).eq('id', taskId)
   }
 
@@ -228,79 +276,48 @@ export default function App() {
     await loadData()
   }
 
-  async function duplicateTask(taskId) {
-    const task = allTasks.find((item) => item.id === taskId)
-    if (!task) return
-    const { data: newTask } = await supabase.from('tasks').insert({ title: `${task.title} copy`, folder_id: task.folderId, due_date: task.due || null, completed: false }).select().single()
-    if (task.subtasks.length) await supabase.from('subtasks').insert(task.subtasks.map((s) => ({ title: s.title, task_id: newTask.id, completed: false })))
-    saveUndo(`Duplicated: ${task.title}`, async () => supabase.from('tasks').delete().eq('id', newTask.id))
-    setShowTaskMenu(false)
-    await loadData()
+  async function updateMasterName(masterId, name) {
+    setMasterCategories((prev) =>
+      prev.map((master) => (master.id === masterId ? { ...master, name } : master))
+    )
+    await supabase.from('master_categories').update({ name }).eq('id', masterId)
   }
 
-  async function deleteTask(taskId) {
-    const task = allTasks.find((item) => item.id === taskId)
-    if (!task) return
-    await supabase.from('tasks').delete().eq('id', taskId)
-    saveUndo(`Deleted: ${task.title}`, async () => {
-      const { data: newTask } = await supabase.from('tasks').insert({ title: task.title, folder_id: task.folderId, due_date: task.due || null, completed: task.completed }).select().single()
-      if (task.subtasks.length) await supabase.from('subtasks').insert(task.subtasks.map((s) => ({ title: s.title, task_id: newTask.id, completed: s.completed })))
-    })
-    setShowSheet(false)
-    await loadData()
+  async function updateCategoryName(categoryId, name) {
+    setMasterCategories((prev) =>
+      prev.map((master) => ({
+        ...master,
+        categories: master.categories.map((category) =>
+          category.id === categoryId ? { ...category, name } : category
+        ),
+      }))
+    )
+    await supabase.from('folders').update({ name }).eq('id', categoryId)
   }
 
-  async function toggleTask(taskId) {
-    const task = allTasks.find((item) => item.id === taskId)
-    const hasOpenSubtasks = task?.subtasks?.some((s) => !s.completed)
-    if (task && !task.completed && hasOpenSubtasks) return showNoticeMessage('This task still has unfinished subtasks. Finish them first.')
-    await supabase.from('tasks').update({ completed: !task.completed }).eq('id', taskId)
-    saveUndo(task.completed ? `Reopened: ${task.title}` : `Completed: ${task.title}`, async () => supabase.from('tasks').update({ completed: task.completed }).eq('id', taskId))
-    await loadData()
-  }
-
-  async function toggleSubtask(taskId, subtaskId) {
-    const task = allTasks.find((t) => t.id === taskId)
-    const subtask = task?.subtasks.find((s) => s.id === subtaskId)
-    if (!subtask) return
-    await supabase.from('subtasks').update({ completed: !subtask.completed }).eq('id', subtaskId)
-    saveUndo(subtask.completed ? `Reopened: ${subtask.title}` : `Completed: ${subtask.title}`, async () => supabase.from('subtasks').update({ completed: subtask.completed }).eq('id', subtaskId))
-    await loadData()
-  }
-
-  async function addSubtask() {
-    const cleanTitle = subtaskTitle.trim()
-    if (!cleanTitle || !currentSelectedTask) return
-    await supabase.from('subtasks').insert({ title: cleanTitle, task_id: currentSelectedTask.id, completed: false })
-    setSubtaskTitle('')
-    await loadData()
+  function completedSubtasks(task) {
+    return task.subtasks.filter((subtask) => subtask.completed).length
   }
 
   function formatDue(date) {
     if (!date) return ''
-    const [y, m, d] = date.split('-')
-    return `${m}/${d}/${y}`
+    const [year, month, day] = date.split('-')
+    return `${month}/${day}/${year}`
   }
 
-  function completedSubtasks(task) {
-    return task.subtasks.filter((s) => s.completed).length
-  }
-
-  const monthName = calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })
   const year = calendarDate.getFullYear()
   const month = calendarDate.getMonth()
+  const monthName = calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' })
   const firstDay = new Date(year, month, 1).getDay()
   const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const calendarCells = Array.from({ length: firstDay + daysInMonth }, (_, i) => (i < firstDay ? null : i - firstDay + 1))
-
-  function changeMonth(direction) {
-    setCalendarDate(new Date(year, month + direction, 1))
-  }
+  const calendarCells = Array.from({ length: firstDay + daysInMonth }, (_, index) =>
+    index < firstDay ? null : index - firstDay + 1
+  )
 
   function tasksForDay(day) {
     if (!day) return []
     const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    return visibleTasks.filter((t) => t.due === iso)
+    return visibleTasks.filter((task) => task.due === iso)
   }
 
   if (loading) return <div className="app"><div className="page">Loading...</div></div>
@@ -326,12 +343,12 @@ export default function App() {
   return (
     <div className="app">
       {notice && <div className="notice">{notice}</div>}
-      {undoAction && <div className="undo-bar"><div className="truncate">{undoAction.message}</div><button onClick={undoLastAction}>Undo</button></div>}
+      {undo && <div className="undo-bar"><div className="truncate">{undo.message}</div><button onClick={restoreUndo}>Undo</button></div>}
 
       <div className="page">
         <header className="header">
           <div><h1>Task Manager</h1><button onClick={signOut} className="signout-button">Sign out</button></div>
-          <button onClick={openMasterSheet} className="round-add">+</button>
+          <button onClick={() => { setNewName(''); setSheet({ type: 'addMaster' }) }} className="round-add">+</button>
         </header>
 
         <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="Search tasks" className="search-input" />
@@ -339,36 +356,30 @@ export default function App() {
         {activeTab === 'inbox' && (
           <section className="section">
             <div className="section-label">Master Categories</div>
-            {masterCategories.length === 0 && <div className="empty-card">No categories yet. Press + to create one.</div>}
+            {masterCategories.length === 0 && <div className="empty-card">No categories yet. Press + to create your first master category.</div>}
             {masterCategories.map((master) => {
-              const taskCount = master.folders.reduce((total, folder) => total + folder.tasks.filter((task) => !task.completed).length, 0)
+              const taskCount = master.categories.reduce((total, category) => total + category.tasks.filter((task) => !task.completed).length, 0)
               return (
                 <div key={master.id} className="master-card">
-                  <div className="master-head clickable-head" onClick={() => openMasterDetail(master)}>
-                    <div>
-                      <div className="master-title">{master.name}</div>
-                      <div className="muted small">{taskCount} open tasks</div>
-                    </div>
-                    <button onClick={(e) => { e.stopPropagation(); openFolderSheet(master.id) }} className="pill-button">+ Category</button>
+                  <div onClick={() => setSheet({ type: 'master', masterId: master.id })} className="master-head clickable-head">
+                    <div><div className="master-title">{master.name}</div><div className="muted small">{taskCount} open tasks</div></div>
+                    <button onClick={(e) => { e.stopPropagation(); setNewName(''); setSheet({ type: 'addCategory', masterId: master.id }) }} className="pill-button">+ Category</button>
                   </div>
 
                   <div className="folder-list">
-                    {master.folders.map((folder) => (
-                      <div key={folder.id} className="folder-card">
-                        <div className="folder-head clickable-head" onClick={() => openFolderDetail(folder, master.name)}>
-                          <div>
-                            <div className="folder-title">{folder.name}</div>
-                            <div className="muted tiny">{folder.tasks.filter((task) => !task.completed).length} tasks</div>
-                          </div>
-                          <button onClick={(e) => { e.stopPropagation(); openAddTask(folder.name) }} className="pill-button small-button">+ Task</button>
+                    {master.categories.map((category) => (
+                      <div key={category.id} className="folder-card">
+                        <div onClick={() => setSheet({ type: 'category', categoryId: category.id })} className="folder-head clickable-head">
+                          <div><div className="folder-title">{category.name}</div><div className="muted tiny">{category.tasks.filter((task) => !task.completed).length} tasks</div></div>
+                          <button onClick={(e) => { e.stopPropagation(); setNewTask(''); setNewDueDate(''); setSheet({ type: 'addTask', categoryId: category.id }) }} className="pill-button small-button">+ Task</button>
                         </div>
                         <div className="task-list">
-                          {folder.tasks.filter((task) => !task.completed).map((task) => (
+                          {category.tasks.filter((task) => !task.completed).map((task) => (
                             <div key={task.id} className="task-row">
                               <button onClick={() => toggleTask(task.id)} className="check-circle" />
-                              <button onClick={() => openTask({ ...task, masterName: master.name, folderName: folder.name, folderId: folder.id })} className="task-main">
+                              <button onClick={() => setSheet({ type: 'task', taskId: task.id })} className="task-main">
                                 <div className="task-title">{task.title}</div>
-                                <div className="muted tiny">{folder.name}{task.subtasks.length > 0 && ` • ${completedSubtasks(task)}/${task.subtasks.length}`}</div>
+                                <div className="muted tiny">{category.name}{task.subtasks.length > 0 && ` • ${completedSubtasks(task)}/${task.subtasks.length}`}</div>
                               </button>
                               {task.due && <div className="due-text">{formatDue(task.due)}</div>}
                               <div className="chevron">›</div>
@@ -384,49 +395,31 @@ export default function App() {
           </section>
         )}
 
-        {activeTab === 'today' && (
-          <section className="section">
-            <div className="section-label">Today</div>
-            {visibleTasks.length === 0 && <div className="empty-card">No tasks for today.</div>}
-            {visibleTasks.map((task) => <button key={task.id} onClick={() => openTask(task)} className="list-card"><div className="task-title">{task.title}</div><div className="muted small">{task.masterName} / {task.folderName}</div></button>)}
-          </section>
-        )}
+        {activeTab === 'today' && <section className="section"><div className="section-label">Today</div>{visibleTasks.length === 0 && <div className="empty-card">No tasks for today.</div>}{visibleTasks.map((task) => <button key={task.id} onClick={() => setSheet({ type: 'task', taskId: task.id })} className="list-card"><div className="task-title">{task.title}</div><div className="muted small">{task.masterName} / {task.categoryName}</div></button>)}</section>}
 
-        {activeTab === 'calendar' && (
-          <section className="section">
-            <div className="calendar-head"><button onClick={() => changeMonth(-1)}>‹</button><div>{monthName}</div><button onClick={() => changeMonth(1)}>›</button></div>
-            <div className="calendar-weekdays">{['S','M','T','W','T','F','S'].map((day, i) => <div key={`${day}-${i}`}>{day}</div>)}</div>
-            <div className="calendar-grid">{calendarCells.map((day, i) => { const dayTasks = tasksForDay(day); return <div key={i} className="calendar-cell">{day && <div className="calendar-day">{day}</div>}{dayTasks.slice(0, 2).map((task) => <button key={task.id} onClick={() => openTask(task)} className="calendar-task">{task.title}</button>)}{dayTasks.length > 2 && <div className="more-tasks">+{dayTasks.length - 2}</div>}</div> })}</div>
-          </section>
-        )}
+        {activeTab === 'calendar' && <section className="section"><div className="calendar-head"><button onClick={() => setCalendarDate(new Date(year, month - 1, 1))}>‹</button><div>{monthName}</div><button onClick={() => setCalendarDate(new Date(year, month + 1, 1))}>›</button></div><div className="calendar-weekdays">{['S','M','T','W','T','F','S'].map((day, i) => <div key={`${day}-${i}`}>{day}</div>)}</div><div className="calendar-grid">{calendarCells.map((day, i) => { const dayTasks = tasksForDay(day); return <div key={i} className="calendar-cell">{day && <div className="calendar-day">{day}</div>}{dayTasks.slice(0, 2).map((task) => <button key={task.id} onClick={() => setSheet({ type: 'task', taskId: task.id })} className="calendar-task">{task.title}</button>)}</div> })}</div></section>}
 
-        {activeTab === 'archive' && (
-          <section className="section">
-            <div className="section-label">Archive</div>
-            {visibleTasks.length === 0 && <div className="empty-card">No completed tasks.</div>}
-            {visibleTasks.map((task) => <div key={task.id} className="archive-card"><div><div className="task-title completed">{task.title}</div><div className="muted small">{task.masterName} / {task.folderName}</div></div><button onClick={() => toggleTask(task.id)}>Unarchive</button></div>)}
-          </section>
-        )}
+        {activeTab === 'archive' && <section className="section"><div className="section-label">Archive</div>{visibleTasks.length === 0 && <div className="empty-card">No completed tasks.</div>}{visibleTasks.map((task) => <div key={task.id} className="archive-card"><div><div className="task-title completed">{task.title}</div><div className="muted small">{task.masterName} / {task.categoryName}</div></div><button onClick={() => toggleTask(task.id)}>Unarchive</button></div>)}</section>}
       </div>
 
       <nav className="bottom-nav">{[['inbox','Inbox','▰'],['today','Today','□'],['calendar','Calendar','▦'],['archive','Archive','▣']].map(([key,label,icon]) => <button key={key} onClick={() => setActiveTab(key)} className={activeTab === key ? 'active' : ''}><span>{icon}</span><small>{label}</small></button>)}</nav>
 
-      {showSheet && (
-        <div className="sheet-backdrop" onClick={() => setShowSheet(false)}>
-          <div className={sheetMode === 'detail' || sheetMode === 'masterDetail' || sheetMode === 'folderDetail' ? 'sheet sheet-tall' : 'sheet'} onClick={(e) => e.stopPropagation()}>
+      {sheet && (
+        <div className="sheet-backdrop sheet-top" onClick={() => setSheet(null)}>
+          <div className="sheet sheet-approved" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-handle" />
 
-            {sheetMode === 'master' && <><h2>Add Master Category</h2><input value={masterNameInput} onChange={(e) => setMasterNameInput(e.target.value)} placeholder="Master category name" /><div className="button-grid"><button onClick={() => setShowSheet(false)} className="outline-button">Cancel</button><button onClick={addMasterCategory} className="primary-button">Add</button></div></>}
+            {sheet.type === 'addMaster' && <><h2>Add Master Category</h2><input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Master category name" /><button onClick={addMasterCategory} className="primary-button full">Add</button></>}
 
-            {sheetMode === 'folder' && <><h2>Add Category</h2><input value={folderNameInput} onChange={(e) => setFolderNameInput(e.target.value)} placeholder="Category name" /><div className="button-grid"><button onClick={() => setShowSheet(false)} className="outline-button">Cancel</button><button onClick={addFolder} className="primary-button">Add</button></div></>}
+            {sheet.type === 'addCategory' && selectedMaster && <><h2>Add Category</h2><div className="muted small">Under {selectedMaster.name}</div><input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Category name" /><button onClick={() => addCategory(selectedMaster.id)} className="primary-button full">Add</button></>}
 
-            {sheetMode === 'task' && <><h2>Add Task</h2><input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Task name" /><input value={folderInput} onChange={(e) => setFolderInput(e.target.value)} list="folder-options" placeholder="Category / job" /><datalist id="folder-options">{allFolders.map((folder) => <option key={folder} value={folder} />)}</datalist><input value={dueDate} onChange={(e) => setDueDate(e.target.value)} type="date" /><div className="button-grid"><button onClick={() => setShowSheet(false)} className="outline-button">Cancel</button><button onClick={addTask} className="primary-button">Add Task</button></div></>}
+            {sheet.type === 'addTask' && selectedCategory && <><h2>Add Task</h2><div className="muted small">{selectedCategory.masterName} / {selectedCategory.name}</div><input value={newTask} onChange={(e) => setNewTask(e.target.value)} placeholder="Task name" /><input value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} type="date" /><button onClick={() => addTaskToCategory(selectedCategory.id)} className="primary-button full">Add Task</button></>}
 
-            {sheetMode === 'masterDetail' && currentSelectedMaster && <><div className="detail-title-row"><input value={currentSelectedMaster.name} onChange={(e) => updateMasterName(currentSelectedMaster.id, e.target.value)} className="title-input" /><button onClick={() => openFolderSheet(currentSelectedMaster.id)} className="pill-button">+ Category</button></div><div className="muted small">Master category</div><div className="detail-list">{currentSelectedMaster.folders.length === 0 && <div className="empty-card">No categories yet.</div>}{currentSelectedMaster.folders.map((folder) => <button key={folder.id} onClick={() => openFolderDetail(folder, currentSelectedMaster.name)} className="detail-list-row"><div><div className="folder-title">{folder.name}</div><div className="muted tiny">{folder.tasks.filter((t) => !t.completed).length} tasks</div></div><span>›</span></button>)}</div></>}
+            {sheet.type === 'master' && selectedMaster && <><div className="detail-title-row"><input value={selectedMaster.name} onChange={(e) => updateMasterName(selectedMaster.id, e.target.value)} className="title-input" /><button onClick={() => { setNewName(''); setSheet({ type: 'addCategory', masterId: selectedMaster.id }) }} className="pill-button">+ Category</button></div><div className="muted small">Master category</div><div className="detail-list">{selectedMaster.categories.length === 0 && <div className="empty-card">No categories yet.</div>}{selectedMaster.categories.map((category) => <button key={category.id} onClick={() => setSheet({ type: 'category', categoryId: category.id })} className="detail-list-row"><div><div className="folder-title">{category.name}</div><div className="muted tiny">{category.tasks.filter((task) => !task.completed).length} tasks</div></div><span>›</span></button>)}</div></>}
 
-            {sheetMode === 'folderDetail' && currentSelectedFolder && <><div className="detail-title-row"><input value={currentSelectedFolder.name} onChange={(e) => updateFolderName(currentSelectedFolder.id, e.target.value)} className="title-input" /><button onClick={() => openAddTask(currentSelectedFolder.name)} className="pill-button">+ Task</button></div><div className="muted small">{currentSelectedFolder.masterName}</div><div className="detail-list">{currentSelectedFolder.tasks.filter((t) => !t.completed).length === 0 && <div className="empty-card">No tasks yet.</div>}{currentSelectedFolder.tasks.filter((t) => !t.completed).map((task) => <div key={task.id} className="task-row detail-task-row"><button onClick={() => toggleTask(task.id)} className="check-circle" /><button onClick={() => openTask({ ...task, masterName: currentSelectedFolder.masterName, folderName: currentSelectedFolder.name, folderId: currentSelectedFolder.id })} className="task-main"><div className="task-title">{task.title}</div><div className="muted tiny">{task.subtasks.length > 0 && `${completedSubtasks(task)}/${task.subtasks.length}`}</div></button>{task.due && <div className="due-text">{formatDue(task.due)}</div>}<div className="chevron">›</div></div>)}</div></>}
+            {sheet.type === 'category' && selectedCategory && <><div className="detail-title-row"><input value={selectedCategory.name} onChange={(e) => updateCategoryName(selectedCategory.id, e.target.value)} className="title-input" /><button onClick={() => { setNewTask(''); setNewDueDate(''); setSheet({ type: 'addTask', categoryId: selectedCategory.id }) }} className="pill-button">+ Task</button></div><div className="muted small">{selectedCategory.masterName}</div><div className="detail-list">{selectedCategory.tasks.filter((task) => !task.completed).length === 0 && <div className="empty-card">No tasks yet.</div>}{selectedCategory.tasks.filter((task) => !task.completed).map((task) => <div key={task.id} className="task-row detail-task-row"><button onClick={() => toggleTask(task.id)} className="check-circle" /><button onClick={() => setSheet({ type: 'task', taskId: task.id })} className="task-main"><div className="task-title">{task.title}</div><div className="muted tiny">{task.subtasks.length > 0 && `${completedSubtasks(task)}/${task.subtasks.length}`}</div></button>{task.due && <div className="due-text">{formatDue(task.due)}</div>}<div className="chevron">›</div></div>)}</div></>}
 
-            {sheetMode === 'detail' && currentSelectedTask && <><div className="detail-head"><button onClick={() => toggleTask(currentSelectedTask.id)} className="check-circle large" /><div className="detail-content"><div className="task-title-edit-row"><input value={currentSelectedTask.title} onChange={(e) => updateTaskTitleLocal(currentSelectedTask.id, e.target.value)} onBlur={(e) => saveTaskTitle(currentSelectedTask.id, e.target.value)} className="title-input" /><div className="task-menu-wrap"><button onClick={() => setShowTaskMenu((prev) => !prev)} className="menu-button">⋯</button>{showTaskMenu && <div className="task-menu"><button onClick={() => duplicateTask(currentSelectedTask.id)}>Duplicate task</button><button onClick={() => deleteTask(currentSelectedTask.id)} className="danger">Delete task</button></div>}</div></div><div className="muted small">{currentSelectedTask.masterName} / {currentSelectedTask.folderName}</div><input value={currentSelectedTask.due || ''} onChange={(e) => updateTaskDue(currentSelectedTask.id, e.target.value)} type="date" className="date-input" />{currentSelectedTask.subtasks.some((s) => !s.completed) && <div className="warning-text">Finish all subtasks before completing.</div>}</div></div><div className="subtask-section"><div className="subtask-head"><h3>Subtasks</h3><div className="muted small">{completedSubtasks(currentSelectedTask)}/{currentSelectedTask.subtasks.length}</div></div>{currentSelectedTask.subtasks.map((subtask) => <div key={subtask.id} className="subtask-row"><button onClick={() => toggleSubtask(currentSelectedTask.id, subtask.id)} className={subtask.completed ? 'check-circle checked' : 'check-circle'} /><div className={subtask.completed ? 'completed subtask-title' : 'subtask-title'}>{subtask.title}</div></div>)}<div className="add-subtask-row"><input value={subtaskTitle} onChange={(e) => setSubtaskTitle(e.target.value)} placeholder="Add subtask" /><button onClick={addSubtask} className="primary-button compact">Add</button></div></div></>}
+            {sheet.type === 'task' && selectedTask && <><div className="detail-head"><button onClick={() => toggleTask(selectedTask.id)} className="check-circle large" /><div className="detail-content"><input value={selectedTask.title} onChange={(e) => updateTaskTitle(selectedTask.id, e.target.value)} className="title-input" /><div className="muted small">{selectedTask.masterName} / {selectedTask.categoryName}</div><input value={selectedTask.due || ''} onChange={(e) => updateTaskDue(selectedTask.id, e.target.value)} type="date" className="date-input" />{selectedTask.subtasks.some((s) => !s.completed) && <div className="warning-text">Finish all subtasks before completing.</div>}</div></div><div className="subtask-section"><div className="subtask-head"><h3>Subtasks</h3><div className="muted small">{completedSubtasks(selectedTask)}/{selectedTask.subtasks.length}</div></div>{selectedTask.subtasks.map((subtask) => <div key={subtask.id} className="subtask-row approved-subtask-row"><button onClick={() => toggleSubtask(selectedTask.id, subtask.id)} className={subtask.completed ? 'check-circle checked' : 'check-circle'} /><div className={subtask.completed ? 'completed subtask-title' : 'subtask-title'}>{subtask.title}</div></div>)}<div className="add-subtask-row"><input value={subtaskText} onChange={(e) => setSubtaskText(e.target.value)} placeholder="Add subtask" /><button onClick={addSubtask} className="primary-button compact">Add</button></div></div></>}
           </div>
         </div>
       )}

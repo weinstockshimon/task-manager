@@ -1,0 +1,70 @@
+.sheet-backdrop.sheet-top{
+  align-items:flex-start;
+  justify-content:center;
+  padding-top:24px;
+}
+
+.sheet.sheet-approved{
+  border-radius:18px;
+  max-height:88vh;
+  margin:0 12px;
+  box-shadow:0 24px 60px rgba(0,0,0,.5);
+}
+
+.subtask-row,
+.approved-subtask-row{
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:16px;
+  padding:6px 0;
+}
+
+.subtask-title{
+  flex:1;
+  text-align:left;
+}
+
+.detail-title-row{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.detail-list{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  padding-top:8px;
+}
+
+.detail-list-row{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  text-align:left;
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:14px;
+  color:white;
+  padding:10px;
+}
+
+.detail-task-row{
+  border-top:none;
+  border-bottom:1px solid rgba(255,255,255,.1);
+}
+
+.clickable-head{
+  cursor:pointer;
+}
+
+.signout-button{
+  background:none;
+  border:none;
+  color:#9ca3af;
+  font-size:11px;
+  padding:0;
+  margin-top:3px;
+}
